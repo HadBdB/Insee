@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recherche INSEE</title>
+<style>
+  :root { --c:#00506e; --g:#2e7d32; --b:#d0d7de; --bg:#f6f8fa; }
+  * { box-sizing:border-box; }
+  body { font-family:"Segoe UI",Arial,sans-serif; margin:0; background:var(--bg); color:#1f2328; }
+  header { background:var(--c); color:#fff; padding:14px 24px; font-size:18px; }
+  main { max-width:780px; margin:24px auto; background:#fff; border:1px solid var(--b); border-radius:6px; padding:24px; }
+  h2 { font-size:15px; margin:22px 0 6px; color:var(--c); }
+  input[type=text] { width:100%; padding:8px 10px; border:1px solid var(--b); border-radius:4px; font-size:14px; }
+  .liste label { display:block; padding:7px 10px; border-bottom:1px solid #eee; cursor:pointer; }
+  .liste label:hover { background:#f0f4f7; }
+  .cible { color:var(--g); font-weight:600; }
+  .sub { color:#57606a; font-size:12px; }
+  .msg { padding:10px; border-radius:4px; margin-top:12px; }
+  .warn { background:#fff8e1; } .err { background:#fdecea; } .ok { background:#e8f5e9; }
+  pre { background:#f6f8fa; border:1px solid var(--b); padding:12px; overflow:auto; font-size:13px; white-space:pre-wrap; }
+  button { padding:9px 18px; border:none; border-radius:4px; background:var(--g); color:#fff; font-weight:600; cursor:pointer; font-size:14px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>Recherche INSEE (recherche-entreprises.api.gouv.fr)</header>
+<main>
+  <input type="text" id="nom" placeholder="Nom de l'entreprise" autocomplete="off">
+  <div id="statut"></div>
+
+  <div id="etape1" class="hidden"><h2>1. Entreprise</h2><div class="liste" id="lstEnt"></div></div>
+  <div id="etape2" class="hidden"><h2>2. Établissement</h2><div class="liste" id="lstEtab"></div></div>
+  <div id="etape3" class="hidden"><h2>3. Dirigeant / représentant</h2><div class="liste" id="lstDir"></div></div>
+
+  <div id="etape4" class="hidden">
+    <h2>4. Résultat à coller dans Snowflake</h2>
+    <pre id="json"></pre>
+    <button id="btnCopier" type="button">📋 Copier</button>
+    <span id="copieOk" class="sub"></span>
+  </div>
+</main>
+
+<script>
+"use strict";
+const API_URL = "https://recherche-entreprises.api.gouv.fr/search";
+const CODES_ARCHI = ["71.11Z", "71.12B", "71.12S"];   // mis en évidence en vert
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const statut = (t, cls) => { $("statut").innerHTML = t ? `<div class="msg ${cls}">${esc(t)}</div>` : ""; };
+const cap = s => (s || "").toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase());
+
+let ents = [], ent = null, etabs = [], etab = null, dirs = [], dir = null, timer = null, seq = 0;
+
+function cpVille(e) { return `${e.code_postal || ""} ${e.libelle_commune || e.commune || ""}`.trim(); }
+
+function libDirigeant(d) {
+  if (!d) return "";
+  if (d.denomination) return `${d.denomination} (${d.qualite || "Personne morale"})`;
+  return `${cap(d.prenoms)} ${(d.nom || "").toUpperCase()} (${d.qualite || "Gérant"})`.replace(/\s+/g, " ").trim();
+}
+
+function radios(conteneur, items, libelle, onChange) {
+  $(conteneur).innerHTML = items.map((it, i) =>
+    `<label><input type="radio" name="${conteneur}" value="${i}"${i === 0 ? " checked" : ""}> ${libelle(it)}</label>`).join("");
+  $(conteneur).querySelectorAll("input").forEach(r => r.addEventListener("change", () => onChange(+r.value)));
+  onChange(0);
+}
+
+function masquer(...ids) { ids.forEach(id => $(id).classList.add("hidden")); }
+function montrer(...ids) { ids.forEach(id => $(id).classList.remove("hidden")); }
+
+async function rechercher() {
+  const q = $("nom").value.trim();
+  masquer("etape1", "etape2", "etape3", "etape4"); statut("");
+  const p = new URLSearchParams(location.search); p.set("q", q); history.replaceState(null, "", "?" + p);
+  if (!q) return;
+  const mon = ++seq;
+  statut("Recherche en cours…", "warn");
+  try {
+    const r = await fetch(`${API_URL}?${new URLSearchParams({ q, per_page: 15, etat_administratif: "A" })}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    if (mon !== seq) return;
+    ents = j.results || [];
+  } catch (e) { if (mon === seq) statut(`Impossible de contacter l'API (${e.message}).`, "err"); return; }
+  if (!ents.length) { statut("Aucun résultat trouvé. Modifiez le nom.", "warn"); return; }
+  statut("");
+  montrer("etape1");
+  radios("lstEnt", ents, e => {
+    const s = e.siege || {};
+    const lib = `${esc(e.nom_complet || "Inconnu")} | ${esc(s.libelle_commune || "???")} <span class="sub">SIREN ${esc(e.siren || "")} · NAF ${esc(e.activite_principale || "")}</span>`;
+    return CODES_ARCHI.includes(e.activite_principale) ? `<span class="cible">● ${lib}</span>` : lib;
+  }, choisirEntreprise);
+}
+
+function choisirEntreprise(i) {
+  ent = ents[i];
+  // Siège en premier, puis les établissements correspondants (sans doublon de SIRET)
+  const vus = new Set(); etabs = [];
+  [{ ...(ent.siege || {}), est_siege: true }, ...(ent.matching_etablissements || [])].forEach(e => {
+    if (e && e.siret && !vus.has(e.siret)) { vus.add(e.siret); etabs.push(e); }
+  });
+  if (!etabs.length) etabs = [ent.siege || {}];
+  montrer("etape2");
+  radios("lstEtab", etabs, e =>
+    `${e.est_siege ? "<b>Siège</b> – " : ""}${esc(e.adresse || "Adresse inconnue")} <span class="sub">SIRET ${esc(e.siret || "?")}</span>`,
+    k => { etab = etabs[k]; majJson(); });
+
+  dirs = ent.dirigeants || [];
+  montrer("etape3");
+  if (dirs.length) radios("lstDir", dirs, d => esc(libDirigeant(d)), k => { dir = dirs[k]; majJson(); });
+  else { dir = null; $("lstDir").innerHTML = '<span class="sub">Aucun dirigeant déclaré</span>'; majJson(); }
+}
+
+function majJson() {
+  if (!ent || !etab) return;
+  const data = {
+    source: "insee",
+    nom: ent.nom_complet || "",
+    siret: etab.siret || "",
+    adresse: etab.adresse || "",
+    cp_ville: cpVille(etab),
+    representant: dir ? libDirigeant(dir) : "Non spécifié"
+  };
+  $("json").textContent = JSON.stringify(data);
+  $("copieOk").textContent = "";
+  montrer("etape4");
+}
+
+$("btnCopier").addEventListener("click", async () => {
+  const t = $("json").textContent;
+  try { await navigator.clipboard.writeText(t); }
+  catch {   // repli si l'API presse-papiers est indisponible
+    const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+    ta.select(); document.execCommand("copy"); ta.remove();
+  }
+  $("copieOk").textContent = "✅ Copié : collez-le dans Snowflake puis cliquez sur « Importer ».";
+});
+$("nom").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(rechercher, 400); });
+
+// Pré-remplissage depuis le lien Snowflake : ?q=<nom>
+const q0 = new URLSearchParams(location.search).get("q");
+if (q0) { $("nom").value = q0; rechercher(); }
+$("nom").focus();
+</script>
+</body>
+</html>
