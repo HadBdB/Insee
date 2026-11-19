@@ -14,11 +14,13 @@
   input[type=text] { width:100%; padding:8px 10px; border:1px solid var(--b); border-radius:4px; font-size:14px; }
   .liste label { display:block; padding:7px 10px; border-bottom:1px solid #eee; cursor:pointer; }
   .liste label:hover { background:#f0f4f7; }
+  .grp { background:#eef3f6; color:var(--c); font-weight:600; font-size:13px; padding:5px 10px; margin-top:8px; }
   .cible { color:var(--g); font-weight:600; }
+  .metier { color:#57606a; font-size:12px; font-weight:400; margin-left:6px; }
+  .vague { font-style:italic; }
   .sub { color:#57606a; font-size:12px; }
   .msg { padding:10px; border-radius:4px; margin-top:12px; }
   .warn { background:#fff8e1; } .err { background:#fdecea; } .ok { background:#e8f5e9; }
-  pre { background:#f6f8fa; border:1px solid var(--b); padding:12px; overflow:auto; font-size:13px; white-space:pre-wrap; }
   button { padding:9px 18px; border:none; border-radius:4px; background:var(--g); color:#fff; font-weight:600; cursor:pointer; font-size:14px; }
   .hidden { display:none; }
 </style>
@@ -34,8 +36,7 @@
   <div id="etape3" class="hidden"><h2>3. Dirigeant / représentant</h2><div class="liste" id="lstDir"></div></div>
 
   <div id="etape4" class="hidden">
-    <h2>4. Résultat à coller dans Snowflake</h2>
-    <pre id="json"></pre>
+    <h2>4. Copier vers Snowflake</h2>
     <button id="btnCopier" type="button">📋 Copier</button>
     <span id="copieOk" class="sub"></span>
   </div>
@@ -44,14 +45,72 @@
 <script>
 "use strict";
 const API_URL = "https://recherche-entreprises.api.gouv.fr/search";
-const CODES_ARCHI = ["71.11Z", "71.12B", "71.12B"];   // mis en évidence en vert
+
+// Priorisation : 1) architecture / ingénierie / contrôle technique, 2) construction (section NAF F), 3) le reste
+const CODES_INGE = ["71.11Z", "71.12A", "71.12B", "71.20B"];
+const SECTION_BTP = "F";
+const groupe = e => CODES_INGE.includes(e.activite_principale) ? 1
+  : (e.section_activite_principale === SECTION_BTP || /^4[123]\./.test(e.activite_principale || "")) ? 2 : 3;
+// Libellés NAF rév. 2 : détail pour le BTP / ingénierie et codes courants, sinon libellé du secteur (section)
+const NAF = {
+  "41.10A":"Promotion immobilière de logements","41.10B":"Promotion immobilière de bureaux",
+  "41.10C":"Promotion immobilière d'autres bâtiments","41.10D":"Supports juridiques de programmes",
+  "41.20A":"Construction de maisons individuelles","41.20B":"Construction d'autres bâtiments",
+  "42.11Z":"Construction de routes et autoroutes","42.12Z":"Construction de voies ferrées",
+  "42.13A":"Construction d'ouvrages d'art","42.13B":"Construction et entretien de tunnels",
+  "42.21Z":"Construction de réseaux pour fluides","42.22Z":"Construction de réseaux électriques et de télécommunications",
+  "42.91Z":"Construction d'ouvrages maritimes et fluviaux","42.99Z":"Construction d'autres ouvrages de génie civil",
+  "43.11Z":"Démolition","43.12A":"Terrassement courant et travaux préparatoires",
+  "43.12B":"Terrassement spécialisé ou de grande masse","43.13Z":"Forages et sondages",
+  "43.21A":"Installation électrique","43.21B":"Installation électrique sur la voie publique",
+  "43.22A":"Plomberie, installation d'eau et de gaz","43.22B":"Chauffage, climatisation (génie climatique)",
+  "43.29A":"Isolation","43.29B":"Autres travaux d'installation","43.31Z":"Plâtrerie",
+  "43.32A":"Menuiserie bois et PVC","43.32B":"Menuiserie métallique et serrurerie","43.32C":"Agencement de lieux de vente",
+  "43.33Z":"Revêtement des sols et des murs","43.34Z":"Peinture et vitrerie","43.39Z":"Autres travaux de finition",
+  "43.91A":"Charpente","43.91B":"Couverture","43.99A":"Étanchéité","43.99B":"Montage de structures métalliques",
+  "43.99C":"Maçonnerie générale et gros œuvre","43.99D":"Autres travaux spécialisés de construction",
+  "43.99E":"Location de matériel de construction avec opérateur",
+  "71.11Z":"Architecture","71.12A":"Géomètre","71.12B":"Ingénierie, études techniques",
+  "71.20A":"Contrôle technique automobile","71.20B":"Analyses, essais et inspections techniques",
+  "08.12Z":"Gravières, sablières, extraction d'argiles","16.23Z":"Fabrication de charpentes et menuiseries",
+  "23.61Z":"Fabrication d'éléments en béton","23.63Z":"Fabrication de béton prêt à l'emploi",
+  "25.11Z":"Fabrication de structures métalliques","46.73A":"Négoce de bois et matériaux de construction",
+  "77.32Z":"Location de machines et équipements pour la construction",
+  "81.10Z":"Services combinés de soutien aux bâtiments","81.21Z":"Nettoyage courant des bâtiments",
+  "68.10Z":"Marchand de biens immobiliers","68.20A":"Location de logements",
+  "68.20B":"Location de terrains et d'autres biens immobiliers","68.31Z":"Agence immobilière",
+  "68.32A":"Administration d'immeubles (syndic)","64.20Z":"Société holding","70.10Z":"Siège social",
+  "70.22Z":"Conseil en gestion","74.10Z":"Design","74.90B":"Activités spécialisées, scientifiques et techniques diverses"
+};
+const SECTIONS = {
+  A:"Agriculture, sylviculture et pêche", B:"Industries extractives", C:"Industrie manufacturière",
+  D:"Production d'électricité et de gaz", E:"Eau, assainissement, déchets et dépollution", F:"Construction",
+  G:"Commerce", H:"Transports et entreposage", I:"Hébergement et restauration", J:"Information et communication",
+  K:"Activités financières et d'assurance", L:"Activités immobilières",
+  M:"Activités spécialisées, scientifiques et techniques", N:"Services administratifs et de soutien",
+  O:"Administration publique", P:"Enseignement", Q:"Santé humaine et action sociale",
+  R:"Arts, spectacles et loisirs", S:"Autres activités de services", T:"Activités des ménages", U:"Organisations extraterritoriales"
+};
+function sectionDe(code) {          // repli si l'API ne fournit pas la section
+  const d = parseInt(code, 10); if (isNaN(d)) return "";
+  const t = [[3,"A"],[9,"B"],[33,"C"],[35,"D"],[39,"E"],[43,"F"],[47,"G"],[53,"H"],[56,"I"],[63,"J"],[66,"K"],
+             [68,"L"],[75,"M"],[82,"N"],[84,"O"],[85,"P"],[88,"Q"],[93,"R"],[96,"S"],[98,"T"],[99,"U"]];
+  return (t.find(([max]) => d <= max) || [])[1] || "";
+}
+function metier(e) {
+  const code = e.activite_principale || "";
+  if (NAF[code]) return { txt: NAF[code], precis: true };
+  const sec = SECTIONS[e.section_activite_principale || sectionDe(code)];
+  return sec ? { txt: sec, precis: false } : { txt: "Activité non renseignée", precis: false };
+}
+const TITRES = { 1: "Architecture / ingénierie", 2: "Construction (BTP)", 3: "Autres activités" };
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const statut = (t, cls) => { $("statut").innerHTML = t ? `<div class="msg ${cls}">${esc(t)}</div>` : ""; };
 const cap = s => (s || "").toLowerCase().replace(/(^|[\s-])\S/g, c => c.toUpperCase());
 
-let ents = [], ent = null, etabs = [], etab = null, dirs = [], dir = null, timer = null, seq = 0;
+let texteCopie = "", ents = [], ent = null, etabs = [], etab = null, dirs = [], dir = null, timer = null, seq = 0;
 
 function cpVille(e) { return `${e.code_postal || ""} ${e.libelle_commune || e.commune || ""}`.trim(); }
 
@@ -61,8 +120,10 @@ function libDirigeant(d) {
   return `${cap(d.prenoms)} ${(d.nom || "").toUpperCase()} (${d.qualite || "Gérant"})`.replace(/\s+/g, " ").trim();
 }
 
-function radios(conteneur, items, libelle, onChange) {
+// titre(item) optionnel : insère un intertitre à chaque changement de groupe
+function radios(conteneur, items, libelle, onChange, titre) {
   $(conteneur).innerHTML = items.map((it, i) =>
+    (titre && (i === 0 || titre(it) !== titre(items[i - 1])) ? `<div class="grp">${titre(it)}</div>` : "") +
     `<label><input type="radio" name="${conteneur}" value="${i}"${i === 0 ? " checked" : ""}> ${libelle(it)}</label>`).join("");
   $(conteneur).querySelectorAll("input").forEach(r => r.addEventListener("change", () => onChange(+r.value)));
   onChange(0);
@@ -71,6 +132,12 @@ function radios(conteneur, items, libelle, onChange) {
 function masquer(...ids) { ids.forEach(id => $(id).classList.add("hidden")); }
 function montrer(...ids) { ids.forEach(id => $(id).classList.remove("hidden")); }
 
+async function appel(q, extra) {
+  const r = await fetch(`${API_URL}?${new URLSearchParams({ q, per_page: 25, etat_administratif: "A", ...extra })}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return (await r.json()).results || [];
+}
+
 async function rechercher() {
   const q = $("nom").value.trim();
   masquer("etape1", "etape2", "etape3", "etape4"); statut("");
@@ -78,21 +145,33 @@ async function rechercher() {
   if (!q) return;
   const mon = ++seq;
   statut("Recherche en cours…", "warn");
-  try {
-    const r = await fetch(`${API_URL}?${new URLSearchParams({ q, per_page: 15, etat_administratif: "A" })}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = await r.json();
-    if (mon !== seq) return;
-    ents = j.results || [];
-  } catch (e) { if (mon === seq) statut(`Impossible de contacter l'API (${e.message}).`, "err"); return; }
+
+  // 3 requêtes en parallèle : ingénierie/archi, construction, recherche libre
+  const rep = await Promise.allSettled([
+    appel(q, { activite_principale: CODES_INGE.join(",") }),
+    appel(q, { section_activite_principale: SECTION_BTP }),
+    appel(q, {})
+  ]);
+  if (mon !== seq) return;   // une saisie plus récente a pris le relais
+  if (rep.every(x => x.status === "rejected")) {
+    statut(`Impossible de contacter l'API (${rep[2].reason.message}).`, "err"); return;
+  }
+  const vus = new Set(); ents = [];
+  rep.forEach(x => (x.status === "fulfilled" ? x.value : []).forEach(e => {
+    const k = e.siren || e.nom_complet;
+    if (!vus.has(k)) { vus.add(k); ents.push(e); }
+  }));
+  ents.sort((a, b) => groupe(a) - groupe(b));   // tri stable : ordre de pertinence API conservé dans chaque groupe
+
   if (!ents.length) { statut("Aucun résultat trouvé. Modifiez le nom.", "warn"); return; }
   statut("");
   montrer("etape1");
+  const nb = {}; ents.forEach(e => nb[groupe(e)] = (nb[groupe(e)] || 0) + 1);
   radios("lstEnt", ents, e => {
-    const s = e.siege || {};
-    const lib = `${esc(e.nom_complet || "Inconnu")} | ${esc(s.libelle_commune || "???")} <span class="sub">SIREN ${esc(e.siren || "")} · NAF ${esc(e.activite_principale || "")}</span>`;
-    return CODES_ARCHI.includes(e.activite_principale) ? `<span class="cible">● ${lib}</span>` : lib;
-  }, choisirEntreprise);
+    const s = e.siege || {}, m = metier(e);
+    const lib = `${esc(e.nom_complet || "Inconnu")} | ${esc(s.libelle_commune || "???")} <span class="metier${m.precis ? "" : " vague"}" title="NAF ${esc(e.activite_principale || "?")} · SIREN ${esc(e.siren || "")}">— ${esc(m.txt)}</span>`;
+    return groupe(e) < 3 ? `<span class="cible">● ${lib}</span>` : lib;
+  }, choisirEntreprise, e => `${TITRES[groupe(e)]} (${nb[groupe(e)]})`);
 }
 
 function choisirEntreprise(i) {
@@ -124,15 +203,15 @@ function majJson() {
     cp_ville: cpVille(etab),
     representant: dir ? libDirigeant(dir) : "Non spécifié"
   };
-  $("json").textContent = JSON.stringify(data);
+  texteCopie = JSON.stringify(data);
   $("copieOk").textContent = "";
   montrer("etape4");
 }
 
 $("btnCopier").addEventListener("click", async () => {
-  const t = $("json").textContent;
+  const t = texteCopie;
   try { await navigator.clipboard.writeText(t); }
-  catch {   // repli si l'API presse-papiers est indisponible
+  catch {
     const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
     ta.select(); document.execCommand("copy"); ta.remove();
   }
