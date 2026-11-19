@@ -44,7 +44,7 @@
 <script>
 "use strict";
 const API_URL = "https://recherche-entreprises.api.gouv.fr/search";
-const CODES_ARCHI = ["71.11Z", "71.12B", "71.12S"];   // mis en évidence en vert
+const CODES_ARCHI = ["71.11Z", "71.12B", "71.12B"];   // mis en évidence en vert
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
